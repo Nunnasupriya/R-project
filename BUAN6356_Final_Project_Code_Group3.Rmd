@@ -1,0 +1,257 @@
+
+---
+title: "BUAN 6356 Business Analytics Project"
+author: "Ruth Colbert, Supriya Nunna, Alexander Lee, Harpreet Dhaliwal, Wenjuan Han,
+  Arunabh Saikia"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+##Load Required Packages
+```{r Load required packages, message=FALSE, warning=FALSE, include=FALSE}
+if(!require('pacman')) install.packages('pacman')
+pacman::p_load(esquisse, forecast, tidyverse, 
+               gplots, GGally, gganimate,
+               mosaic, scales, mosaic, mapproj, mlbench, data.table, 
+               contrib.url, leaps, dplyr, ggplot2, pivottabler, caret,
+               rpart, rpart.plot, rattle, pROC)
+library(pivottabler)
+library(dplyr)
+library(leaps)
+library(MASS)
+library(readr)
+library(corrplot)
+library(gridExtra)
+library(grid)
+library(readr)
+library(ggplot2)
+library(caret)
+library(pROC)
+```
+
+##Reading the dataset
+
+```{r DataTable}
+Original_Project_Data <- fread("Original Project Data.csv")
+summary(Original_Project_Data)
+theme_set(theme_classic())
+#Removing enrollee_id  as it's a unique id number and further analysis can't be done
+#Removing city variable as identity of the city can't predicted
+ProjectData.dt <- setDT(Original_Project_Data [,-c(1:2)])
+str(ProjectData.dt)
+```
+
+##Factoring categorical variables
+```{r Factoring and Cleaning Dataset, warning=FALSE}
+#Gender
+ProjectData.dt$gender <- factor(ProjectData.dt$gender, levels = c("Male", "Female", "Other"))
+#Relevent Experience
+ProjectData.dt$relevent_experience <- factor(ProjectData.dt$relevent_experience, levels = c("Has relevent experience", "No relevent experience"))
+#Enrolled University
+ProjectData.dt$enrolled_university <- factor(ProjectData.dt$enrolled_university, levels = c("no_enrollment", "Part time course", "Full time course"))
+#Education Level
+#Combined Primary School and High School Education Level to "High School" 
+ProjectData.dt$education_level[ProjectData.dt$education_level == 'Primary School'] <- "High School"
+ProjectData.dt$education_level <- factor(ProjectData.dt$education_level, levels = c("High School", "Graduate","Masters", "Phd"))
+#Major Discipline
+ProjectData.dt$major_discipline <- factor(ProjectData.dt$major_discipline)
+#Experience
+ProjectData.dt$experience[ProjectData.dt$experience == '<1'] <- 0 #indicates less than 1 year 
+#replacing '>20' with '21' to represent more than 20 years
+ProjectData.dt$experience[ProjectData.dt$experience == '>20'] <- 21 #indicates anything over 20 years 
+ProjectData.dt$years_experience <- as.integer(ProjectData.dt$experience)
+#Company Size
+ProjectData.dt$company_size[ProjectData.dt$company_size == 'Oct-49'] <- '1000-4999'
+ProjectData.dt$company_size <- factor(ProjectData.dt$company_size, levels = c("<10", "50-99", "100-500", "500-999", "1000-4999", "5000-9999", "10000+"))
+#Company Type
+ProjectData.dt$company_type <- factor(ProjectData.dt$company_type)
+#Last New Job
+ProjectData.dt$last_new_job[ProjectData.dt$last_new_job == 'never'] <- 0 #indicates they are in their fist job
+ProjectData.dt$last_new_job[ProjectData.dt$last_new_job == '>4'] <- 5 #indicates more than 5 years of experience
+ProjectData.dt$last_new_job <- as.integer(ProjectData.dt$last_new_job)
+#target indicates whether an employee is interest in New Job/not
+ProjectData.dt$target <- factor(ProjectData.dt$target, levels= c(0,1), labels = c("Not Interested", "Interested"))
+str(ProjectData.dt)
+
+
+ProjectData.dt <- ProjectData.dt[,-7] #removing duplicate experience column
+ProjectData.dt[is.na(ProjectData.dt)] <- 0.5 #indicates NA values #we can delete city and enrollee_id here
+ProjectData.dt
+
+```
+
+###Exploratory Data Analysis
+```{r People Surveyed, warning=FALSE}
+pt <- PivotTable$new()
+pt$addData(ProjectData.dt)
+pt$addColumnDataGroups("gender")
+pt$addRowDataGroups("target")
+pt$defineCalculation(calculationName="TotalSurveyed", summariseExpression="n()")
+pt$renderPivot()
+
+#Total Number of People Interested in a New Data Science Job
+ggplot(ProjectData.dt, aes(x = target)) +
+  geom_bar(fill = "gold1", outlier.color = "firebrick2") +
+  geom_text(aes(label = ..count..), stat = "count", vjust = 1.5, colour = "black") +
+xlab("# of people interested in new job") + ggtitle("Are You Inteterested in New Data Science Job?")
+
+#All Gender Bar Chart
+ggplot(ProjectData.dt, aes(x = gender)) +
+  geom_bar(fill = "salmon", outlier.color = "black") +
+  geom_text(aes(label = ..count..), stat = "count", vjust = 1.5, colour = "black") +
+xlab("Gender") + ylab("Surveyed People") + ggtitle("Who wants to be a Data Scientist?")
+```
+
+```{r Experience, warning=FALSE}
+#Number of Years Experience
+ggplot(data = ProjectData.dt) +
+  geom_histogram(fill = "orange", mapping = aes(x = years_experience), binwidth = 0.5)+ 
+    xlab("Number of Years of Work Experience") + ggtitle("How Long Have You Been Working?")
+#Majority of surveyed data scientists have more than 20 years experience
+
+#Relevant experience
+ggplot(data = ProjectData.dt, mapping = aes(x = relevent_experience)) +
+  geom_bar(fill = "green", outlier.color = "black") +
+  geom_text(aes(label = ..count..), stat = "count", vjust = 1.5, colour = "black") +
+    xlab("Relevant Data Science Experience") + ggtitle("Do You Have Relevant Experience?")
+```
+
+```{r Last Earned Education}
+#Box plot - City_developement_index vs education_level
+ggplot(data = ProjectData.dt, mapping = aes(x=education_level, y=city_development_index)) +
+geom_boxplot(fill= "light blue") +
+xlab("Last Highest Earned Education") + ggtitle("Highest Education Level Earned")
+#Primary school and High School are similar, Masters and Graduate seem to be similar too. However, PhD have a lower range
+
+#pie-chart for education_level
+pie_chart_data <- ProjectData.dt %>% group_by(education_level) %>%
+summarise(count_rows = n(),
+percent_edu=round((count_rows/nrow(ProjectData.dt))*100,2))
+pie_chart_data
+
+#assigning label
+pie_chart_data_with_labels <- pie_chart_data%>%
+     dplyr::mutate(id = LETTERS[row_number()])
+
+
+ggplot(pie_chart_data_with_labels, aes(x = "", y = percent_edu, fill = paste0(id,' :',education_level,'(',percent_edu,'%)'))) +
+geom_bar(width = 1, stat = "identity", color = "white") +
+coord_polar(theta = "y")+
+geom_text(aes(x=1.4,label=id),position = position_stack(vjust = 0.45),color = "white")+
+ggtitle("Last Earned Education Distribution")+
+theme_void()+
+labs(x = NULL, y = NULL, fill = NULL)
+```
+
+```{r Current School Enrollment }
+ggplot(data = ProjectData.dt, mapping = aes(x = enrolled_university)) +
+  geom_bar(fill = "brown") +
+    geom_text(aes(label = ..count..), stat = "count", vjust = 1.5, colour = "green")+ 
+  xlab("Current Enrollment Status") + ggtitle("Are You Currently Enrolled in School?")
+#Majority of surveyed sample group were not enrolled in school 
+```
+
+
+```{r City_index}
+pt <- PivotTable$new()
+pt$addData(ProjectData.dt)
+pt$addColumnDataGroups("gender")
+pt$addRowDataGroups("city_development_index")
+pt$defineCalculation(calculationName="TotalSurveyed", summariseExpression="n()")
+pt$renderPivot()
+ggplot(data = ProjectData.dt, mapping = aes(x = city_development_index)) +
+geom_histogram(fill= "blue", bins = 30) +
+xlab("City Index Scores") + ggtitle("City Development")
+#The most common city development score is .920 out of .949 among the Data Scientists surveyed
+```
+
+##Chi-Square test
+```{r education_level vs target}
+chisq.test(table(ProjectData.dt$education_level,ProjectData.dt$target))
+```
+
+```{r gender vs target}
+chisq.test(table(ProjectData.dt$gender,ProjectData.dt$target))
+```
+
+```{r major_discipline vs target}
+chisq.test(table(ProjectData.dt$enrolled_university,ProjectData.dt$target))
+```
+
+##Removing NA values
+```{r}
+ProjectData.dt<-na.omit(ProjectData.dt)
+```
+
+##Data partition
+```{r Data Partition}
+smp_size <- floor(0.75 * nrow(ProjectData.dt))
+smp_size
+set.seed(122)
+HRData.Index <- sample(c(1:nrow(ProjectData.dt)), smp_size)
+#Training dataset
+HRData.train.dt <- ProjectData.dt[HRData.Index, ]
+#Validation dataset
+HRData.valid.dt <- ProjectData.dt[-HRData.Index, ]
+```
+###Emperical Analysis
+
+##Logistic Regression
+```{r Logistic Regression}
+HRData.logreg <- glm(target ~., data = HRData.train.dt, family="binomial")
+options(scipen = 999)
+summary(HRData.logreg)
+```
+```{r Exponent of Coefficients}
+exp(coef(HRData.logreg))
+```
+
+##Forward Regression
+```{r Forward Regression}
+HRData.logreg.null <- glm(target~1, data = HRData.train.dt, family="binomial")
+HrData.glm.bselect <- step(HRData.logreg.null,scope=list(lower=HRData.logreg.null,upper=HRData.logreg),direction = "forward")
+summary(HrData.glm.bselect)  
+```
+
+##Backward Regression
+```{r Backward Regression}
+HrData.glm.bselect <- step(HRData.logreg, direction = "backward")
+summary(HrData.glm.bselect)  
+```
+
+##Stepwise Regression
+```{r Stepwise Regression}
+HRData.glm.stepwise <- step(HRData.logreg, direction = "both")
+summary(HRData.glm.stepwise)  
+```
+
+##Decision Tree
+```{r Decision Tree}
+#using training data
+default.ct <- rpart(target ~ ., data = HRData.train.dt, method = "class")
+prp(default.ct, type = 1, extra = 1, under = TRUE, roundint = FALSE, 
+    split.font = 2, varlen = -10, box.palette = "BuOr")
+rpart.rules(default.ct, cover = TRUE)
+```
+
+##ROC curve Comparisons
+```{r ROC of Logistic Regression Model, warning=FALSE}
+logit.reg.pred3 <- predict(HRData.logreg, HRData.valid.dt[, -11], type = "link")
+roc(HRData.valid.dt$target, logit.reg.pred3, plot=TRUE, col="#357fb8", 
+lwd=3, print.auc=TRUE)
+```
+
+
+```{r ROC of Stepwise Regression Model, warning= FALSE}
+logit.reg.pred4 <- predict(HRData.glm.stepwise, HRData.valid.dt[, -11], type = "link")
+roc(HRData.valid.dt$target, logit.reg.pred4, plot=TRUE, col="#357fb8", 
+lwd=3, print.auc=TRUE)
+```
+
+##Confusion Matrix
+```{r CM- Stepwise Regression, warning= FALSE}
+logit.reg.pred4 <- predict(HRData.glm.stepwise, HRData.valid.dt[, -11], type = "response")
+t(t(head(logit.reg.pred4, 10)))
+table(HRData.valid.dt$target , logit.reg.pred4 > 0.5)
+```
+
